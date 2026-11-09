@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model Monitoring API</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/static/ui.css">
+<style>
+  .hist{display:grid;grid-template-columns:repeat(10,1fr);gap:4px;align-items:end;height:140px;padding:8px;background:var(--bg-2);border:1px solid var(--line);border-radius:8px}
+  .hist div{background:var(--accent);border-radius:3px 3px 0 0;min-height:2px;position:relative}
+  .hist div span{position:absolute;bottom:-18px;left:0;right:0;text-align:center;font-family:var(--mono);font-size:.68rem;color:var(--fg-3)}
+  .hist{margin-bottom:22px}
+  .drift td.on{color:var(--warn)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>Model Monitoring API</h1>
+    <span class="sub">The churn champion model (logistic regression) behind FastAPI, every request counted and timed for Prometheus, inputs watched for drift.</span>
+    <span class="badge on" id="model-badge">model: loading</span>
+    <span class="badge">port 8115</span>
+  </header>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Fire traffic</h2>
+      <p class="muted">Scores random customers through the live model in one call, then refreshes the numbers below.</p>
+      <div class="row">
+        <button id="run">Fire 50 requests</button>
+        <button class="ghost" id="run-shifted">Fire 50 drifted requests</button>
+        <span id="busy" hidden><span class="spinner"></span></span>
+      </div>
+      <pre id="result" class="empty" style="margin-top:12px">No traffic yet. Press the button, or POST /predict with a customer JSON.</pre>
+    </section>
+
+    <section class="card">
+      <h2>Score one customer</h2>
+      <form id="predict-form" class="grid" style="grid-template-columns:1fr 1fr">
+        <div><label>Tenure (months)</label><input name="Tenure" type="number" value="6" min="0" max="120"></div>
+        <div><label>Monthly charges</label><input name="MonthlyCharges" type="number" step="0.01" value="95"></div>
+        <div><label>Contract</label><select name="Contract"><option>Month-to-month</option><option>One year</option><option>Two year</option></select></div>
+        <div><label>Internet</label><select name="InternetService"><option>Fiber optic</option><option>DSL</option><option>No</option></select></div>
+        <div style="grid-column:1/-1" class="row"><button type="submit" id="predict-btn">Predict</button><span id="predict-out" class="meta"></span></div>
+      </form>
+    </section>
+  </div>
+
+  <section class="card" style="margin-top:16px">
+    <h2>Live numbers</h2>
+    <div class="grid" id="stats">
+      <div class="stat"><b id="s-requests">0</b><span>predictions served</span></div>
+      <div class="stat"><b id="s-p50">–</b><span>p50 inference ms</span></div>
+      <div class="stat"><b id="s-p99">–</b><span>p99 inference ms</span></div>
+      <div class="stat"><b id="s-mean">–</b><span>mean churn score</span></div>
+      <div class="stat"><b id="s-drift">–</b><span>drift status</span></div>
+    </div>
+    <figure style="margin-top:18px">
+      <div class="hist" id="hist"></div>
+      <figcaption>Churn probability histogram over the last window (buckets 0.0 to 1.0). A healthy stream stays spread; a pile-up at one end means the inputs changed.</figcaption>
+    </figure>
+    <div class="scroll"><table class="drift" id="drift-table"><thead><tr><th>Feature</th><th>Train mean</th><th>Recent mean</th><th>z</th><th>Flag</th></tr></thead><tbody></tbody></table></div>
+    <p class="meta" style="margin-top:10px">Raw: <a href="/metrics">/metrics</a> (Prometheus), <a href="/drift">/drift</a>, <a href="/summary">/summary</a>, <a href="/docs">/docs</a></p>
+  </section>
+</div>
+<script>
+const $ = (s) => document.querySelector(s);
+async function j(url, opts) { const r = await fetch(url, opts); if (!r.ok) throw new Error(r.status + " " + (await r.text())); return r.json(); }
+function renderHist(b) {
+  const max = Math.max(1, ...b); const h = $("#hist"); h.innerHTML = "";
+  b.forEach((v, i) => { const d = document.createElement("div"); d.style.height = (100 * v / max) + "%"; d.title = v + " in " + (i/10).toFixed(1) + "-" + ((i+1)/10).toFixed(1); d.innerHTML = "<span>" + (i/10).toFixed(1) + "</span>"; h.appendChild(d); });
+}
+async function refresh() {
+  const s = await j("/summary");
+  $("#s-requests").textContent = s.requests; $("#s-p50").textContent = s.p50_ms; $("#s-p99").textContent = s.p99_ms;
+  $("#s-mean").textContent = s.mean_score ?? "–"; renderHist(s.score_histogram);
+  const d = await j("/drift"); $("#s-drift").textContent = d.status; $("#s-drift").style.color = d.status === "drift" ? "var(--warn)" : "var(--ok)";
+  const tb = $("#drift-table tbody"); tb.innerHTML = "";
+  for (const [k, v] of Object.entries(d.features || {})) {
+    if (v.z === undefined) continue;
+    tb.insertAdjacentHTML("beforeend", `<tr><td>${k}</td><td>${v.train_mean}</td><td>${v.recent_mean}</td><td class="${v.drifted ? "on" : ""}">${v.z}</td><td>${v.drifted ? '<span class="pill warn">drift</span>' : '<span class="pill ok">ok</span>'}</td></tr>`);
+  }
+}
+async function fire(shifted) {
+  const btns = [$("#run"), $("#run-shifted")]; btns.forEach(b => b.disabled = true); $("#busy").hidden = false;
+  try {
+    const r = await j("/simulate?n=50&shifted=" + shifted, { method: "POST" });
+    $("#result").classList.remove("empty");
+    $("#result").textContent = `${r.n} requests in ${r.seconds}s` + (shifted ? " (tenure +36 months, charges +$60)" : "") + `\nmean score ${r.mean_score}, predicted churn rate ${r.churn_rate}\np50 ${r.summary.p50_ms} ms, p99 ${r.summary.p99_ms} ms over the last ${r.summary.window}`;
+    await refresh();
+  } catch (e) { $("#result").textContent = "Failed: " + e.message + ". Is the churn model trained? (just churn_predictor-train)"; }
+  finally { btns.forEach(b => b.disabled = false); $("#busy").hidden = true; }
+}
+$("#run").onclick = () => fire(false); $("#run-shifted").onclick = () => fire(true);
+$("#predict-form").onsubmit = async (e) => {
+  e.preventDefault(); const f = new FormData(e.target); const body = Object.fromEntries(f.entries());
+  body.Tenure = +body.Tenure; body.MonthlyCharges = +body.MonthlyCharges; body.TotalCharges = body.Tenure * body.MonthlyCharges;
+  try { const r = await j("/predict", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    $("#predict-out").textContent = `churn probability ${(r.prediction * 100).toFixed(1)}% (${r.model}, ${r.inference_ms} ms)`; await refresh();
+  } catch (err) { $("#predict-out").textContent = "Failed: " + err.message; }
+};
+j("/health").then(h => { $("#model-badge").textContent = h.model_loaded ? "model: churn " + String(h.model || "champion").replace(/_/g, " ") : "model: NOT LOADED"; $("#model-badge").classList.toggle("on", h.model_loaded); });
+refresh().catch(() => {});
+</script>
+</body>
+</html>

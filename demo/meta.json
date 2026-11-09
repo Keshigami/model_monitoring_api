@@ -1,0 +1,60 @@
+{
+ "folder": "portfolio/model_monitoring_api",
+ "slug": "portfolio__model_monitoring_api",
+ "port": 8115,
+ "title": "Model Monitoring API",
+ "one_liner": "The churn model served by FastAPI with Prometheus request, latency and score histograms, plus a z-score drift check on the last 200 inputs.",
+ "duration_s": 70.5,
+ "highlight_s": 6.9,
+ "steps": [
+  {
+   "n": 1,
+   "text": "Model monitoring: fire 50 requests at the churn model",
+   "ok": true,
+   "t": 2.6
+  },
+  {
+   "n": 2,
+   "text": "Live numbers: predictions served, p50 and p99 inference time, drift status",
+   "ok": true,
+   "t": 11.4
+  },
+  {
+   "n": 3,
+   "text": "Churn probability histogram over the last window",
+   "ok": true,
+   "t": 17.2
+  },
+  {
+   "n": 4,
+   "text": "Drift table: training mean versus recent mean, per feature",
+   "ok": true,
+   "t": 26.4
+  },
+  {
+   "n": 5,
+   "text": "Now 50 drifted requests: the flags change",
+   "ok": true,
+   "t": 36.2
+  },
+  {
+   "n": 6,
+   "text": "The drift rows flagged",
+   "ok": true,
+   "t": 45.9
+  },
+  {
+   "n": 7,
+   "text": "The raw Prometheus scrape at /metrics",
+   "ok": true,
+   "t": 56.5
+  },
+  {
+   "n": 8,
+   "text": "Back on the page: the tiles keep counting",
+   "ok": true,
+   "t": 62.9
+  }
+ ],
+ "skipped": []
+}
